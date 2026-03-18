@@ -3626,6 +3626,9 @@ async function sendLinkAPIChatImageRequest(settings, requestBody) {
         ],
         modalities: ['image', 'text'],
         stream: false,
+        image_config: {
+            size: (requestBody.size || getImageSize(settings.aspect_ratio || '1:1')).replace('x', ':'),
+        },
     };
 
     const headers = {
