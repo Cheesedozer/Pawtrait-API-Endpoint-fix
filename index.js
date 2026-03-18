@@ -1808,6 +1808,7 @@ function getModelRuntimeProfile(modelOrId, providerId = null) {
 
     const transport = (() => {
         if (activeProviderId === 'linkapi' && family === 'gemini-image') return 'linkapi-gemini-native';
+        if (activeProviderId === 'linkapi') return 'linkapi-chat';
         if (activeProviderId === 'openrouter' && supportsImageInput && (family === 'openai-image' || supportedParameters.includes('input_image'))) {
             return 'openrouter-responses';
         }
@@ -3585,6 +3586,181 @@ async function sendGeminiImageRequest(settings, requestBody) {
 }
 
 /**
+ * Send image request using LinkAPI's chat completions format
+ * Used for non-Gemini models (e.g. nai-diffusion) that don't support /v1/images/generations
+ */
+async function sendLinkAPIChatImageRequest(settings, requestBody) {
+    const providerConfig = getProviderConfig(settings);
+    const endpoint = providerConfig.chatUrl || 'https://api.linkapi.ai/v1/chat/completions';
+    const modelProfile = getModelRuntimeProfile(requestBody.model, 'linkapi');
+    const aspectRatio = getGeminiAspectRatio(requestBody.aspect_ratio || settings.aspect_ratio || '1:1');
+    const promptText = prependAspectRatioDirective(requestBody.prompt, aspectRatio);
+    let imageUrls = collectReferenceImageDataUrls(requestBody);
+
+    if (Number.isFinite(modelProfile.maxReferenceImages) && modelProfile.maxReferenceImages > 0 && imageUrls.length > modelProfile.maxReferenceImages) {
+        imageUrls = imageUrls.slice(0, modelProfile.maxReferenceImages);
+        toastr.warning(`${modelProfile.modelId} supports up to ${modelProfile.maxReferenceImages} reference images. Using the first ${modelProfile.maxReferenceImages}.`, 'Pawtrait');
+    }
+
+    // Build messages array with prompt and optional reference images
+    const contentParts = [];
+    if (promptText) {
+        contentParts.push({ type: 'text', text: promptText });
+    }
+    for (const dataUrl of imageUrls) {
+        contentParts.push({
+            type: 'image_url',
+            image_url: { url: dataUrl },
+        });
+    }
+
+    const linkApiRequestBody = {
+        model: requestBody.model,
+        messages: [
+            {
+                role: 'user',
+                content: contentParts.length === 1 && contentParts[0].type === 'text'
+                    ? contentParts[0].text
+                    : contentParts,
+            },
+        ],
+        modalities: ['image', 'text'],
+        stream: false,
+    };
+
+    const headers = {
+        'Content-Type': 'application/json',
+    };
+    if (getCurrentApiKey()) headers['Authorization'] = `Bearer ${getCurrentApiKey()}`;
+
+    addRuntimeLog('debug', 'Sending LinkAPI chat image request', {
+        endpoint,
+        model: requestBody.model,
+        requestBody: linkApiRequestBody,
+    });
+
+    console.log(`[${extensionName}] Sending LinkAPI chat image request to ${endpoint}`);
+    console.log(`[${extensionName}] LinkAPI chat request body:`, JSON.stringify(linkApiRequestBody, null, 2));
+
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(linkApiRequestBody),
+    });
+    addRuntimeLog('debug', 'LinkAPI chat image response status', {
+        endpoint,
+        model: requestBody.model,
+        status: response.status,
+        ok: response.ok,
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[${extensionName}] LinkAPI Chat API Error:`, response.status, errorText);
+        addRuntimeLog('error', 'LinkAPI chat image request failed', {
+            endpoint,
+            model: requestBody.model,
+            status: response.status,
+            errorText,
+        });
+        let errorMessage = `LinkAPI Chat API Error ${response.status}`;
+        try {
+            const errorJson = JSON.parse(errorText);
+            errorMessage = errorJson.error?.message || errorJson.message || errorMessage;
+        } catch (err) {
+            if (errorText.length < 200) errorMessage += `: ${errorText}`;
+        }
+        throw new Error(errorMessage);
+    }
+
+    const result = await response.json();
+    console.log(`[${extensionName}] LinkAPI chat response:`, JSON.stringify(result, null, 2).substring(0, 1000));
+    addRuntimeLog('debug', 'LinkAPI chat image response payload', {
+        endpoint,
+        model: requestBody.model,
+        result,
+    });
+
+    // Parse response: { choices: [{ message: { images: [{ image_url: { url: "data:..." } }] } }] }
+    const message = result.choices?.[0]?.message;
+    if (!message) {
+        throw new Error('No message in LinkAPI chat response');
+    }
+
+    // Check for images array
+    if (message.images && message.images.length > 0) {
+        const imageData = message.images[0];
+        const url = imageData.image_url?.url || imageData.url;
+        if (url && url.startsWith('data:')) {
+            const match = url.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+                addRuntimeLog('info', 'LinkAPI chat image response parsed (data URL)', {
+                    model: requestBody.model,
+                    mimeType: match[1],
+                    imageDataLength: String(match[2] || '').length,
+                });
+                return { imageData: match[2], mimeType: match[1] };
+            }
+        }
+        if (url && /^https?:\/\//i.test(url)) {
+            const imageResponse = await fetch(url);
+            if (imageResponse.ok) {
+                const blob = await imageResponse.blob();
+                const base64 = await getBase64Async(blob);
+                const parts = base64.split(',');
+                const mimeType = parts[0]?.match(/data:([^;]+)/)?.[1] || blob.type || 'image/png';
+                return { imageData: parts[1] || base64, mimeType };
+            }
+        }
+    }
+
+    // Check for content array with image parts (alternative response format)
+    if (Array.isArray(message.content)) {
+        for (const part of message.content) {
+            if (part.type === 'image_url' && part.image_url?.url) {
+                const url = part.image_url.url;
+                if (url.startsWith('data:')) {
+                    const match = url.match(/^data:([^;]+);base64,(.+)$/);
+                    if (match) return { imageData: match[2], mimeType: match[1] };
+                }
+                if (/^https?:\/\//i.test(url)) {
+                    const imageResponse = await fetch(url);
+                    if (imageResponse.ok) {
+                        const blob = await imageResponse.blob();
+                        const base64 = await getBase64Async(blob);
+                        const parts = base64.split(',');
+                        const mimeType = parts[0]?.match(/data:([^;]+)/)?.[1] || blob.type || 'image/png';
+                        return { imageData: parts[1] || base64, mimeType };
+                    }
+                }
+            }
+        }
+    }
+
+    // Check for base64 data directly in the response (some providers return data array)
+    if (result.data?.[0]?.b64_json) {
+        return { imageData: result.data[0].b64_json, mimeType: 'image/png' };
+    }
+    if (result.data?.[0]?.url) {
+        const imageResponse = await fetch(result.data[0].url);
+        if (imageResponse.ok) {
+            const blob = await imageResponse.blob();
+            const base64 = await getBase64Async(blob);
+            const parts = base64.split(',');
+            const mimeType = parts[0]?.match(/data:([^;]+)/)?.[1] || blob.type || 'image/png';
+            return { imageData: parts[1] || base64, mimeType };
+        }
+    }
+
+    console.error(`[${extensionName}] No image found in LinkAPI chat response:`, message);
+    addRuntimeLog('error', 'LinkAPI chat response missing image', {
+        model: requestBody.model,
+        message,
+    });
+    throw new Error('No image returned from LinkAPI. The model may have returned text only.');
+}
+
+/**
  * Send image request using OpenRouter's chat completions format
  * OpenRouter uses /v1/chat/completions with modalities: ["image", "text"]
  */
@@ -4011,6 +4187,11 @@ async function sendImageRequest(settings, requestBody) {
     if (modelProfile.transport === 'linkapi-gemini-native') {
         console.log(`[${extensionName}] Using LinkAPI Gemini native format for model: ${modelProfile.modelId}`);
         return sendGeminiImageRequest(settings, requestBody);
+    }
+
+    if (modelProfile.transport === 'linkapi-chat') {
+        console.log(`[${extensionName}] Using LinkAPI chat completions for model: ${modelProfile.modelId}`);
+        return sendLinkAPIChatImageRequest(settings, requestBody);
     }
 
     // OpenRouter supports both chat-completions and responses transports depending on model.
