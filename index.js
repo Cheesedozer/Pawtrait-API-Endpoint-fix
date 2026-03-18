@@ -3752,14 +3752,27 @@ async function sendLinkAPIChatImageRequest(settings, requestBody) {
         }
     }
 
-    // Check for content as string (base64 or data URL)
-    if (typeof message.content === 'string' && message.content.length > 256) {
+    // Check for content as string (URL, data URL, or raw base64)
+    if (typeof message.content === 'string' && message.content.trim().length > 0) {
         const content = message.content.trim();
+        // Data URL
         if (content.startsWith('data:')) {
             const match = content.match(/^data:([^;]+);base64,(.+)$/);
             if (match) return { imageData: match[2], mimeType: match[1] };
         }
-        if (/^[A-Za-z0-9+/\r\n]+=*$/.test(content)) {
+        // HTTP(S) URL pointing to generated image
+        if (/^https?:\/\//i.test(content)) {
+            const imageResponse = await fetch(content);
+            if (imageResponse.ok) {
+                const blob = await imageResponse.blob();
+                const base64 = await getBase64Async(blob);
+                const parts = base64.split(',');
+                const mimeType = parts[0]?.match(/data:([^;]+)/)?.[1] || blob.type || 'image/png';
+                return { imageData: parts[1] || base64, mimeType };
+            }
+        }
+        // Raw base64 (long string without spaces/HTML)
+        if (content.length > 256 && /^[A-Za-z0-9+/\r\n]+=*$/.test(content)) {
             return { imageData: content, mimeType: 'image/png' };
         }
     }
