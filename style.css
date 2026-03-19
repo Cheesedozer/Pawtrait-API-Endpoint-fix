@@ -1023,6 +1023,81 @@
     cursor: not-allowed !important;
 }
 
+/* Studio Tab Styles */
+.nig_studio_output {
+    border-radius: 8px;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.2);
+    min-height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.nig_studio_output img {
+    width: 100%;
+    display: block;
+}
+.nig_studio_output img[src=""] {
+    display: none;
+}
+.nig_studio_output:not(:has(img[src])):after,
+.nig_studio_output:has(img[src=""]):after {
+    content: 'Your image will appear here';
+    color: var(--SmartThemeQuoteColor);
+    opacity: 0.5;
+    font-size: 0.9em;
+}
+.nig_edit_prompt_actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 4px;
+}
+.nig_edit_buttons {
+    display: flex;
+    gap: 4px;
+}
+.nig_collapsible {
+    cursor: pointer;
+    user-select: none;
+}
+.nig_collapsible:hover {
+    opacity: 0.8;
+}
+.nig_collapse_icon {
+    margin-left: auto;
+    transition: transform 0.2s;
+}
+.nig_collapse_icon.expanded {
+    transform: rotate(180deg);
+}
+.nig_gallery_badge {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    font-size: 0.7em;
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 4px;
+    padding: 2px 4px;
+    pointer-events: none;
+}
+.nig_studio_seed_info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 3px;
+}
+.nig_studio_last_seed {
+    font-size: 0.8em;
+    color: var(--SmartThemeQuoteColor);
+    cursor: pointer;
+    opacity: 0.8;
+}
+.nig_studio_last_seed:hover {
+    opacity: 1;
+    text-decoration: underline;
+}
+
 /* Mobile Responsive Styles */
 @media (max-width: 768px) {
     /* Tabs - stack or scroll horizontally */

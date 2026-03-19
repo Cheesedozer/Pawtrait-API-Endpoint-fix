@@ -110,6 +110,34 @@ Scene: [2-3 descriptive sentences]
     system_instruction: 'Detailed illustration, high quality.',
     gallery: [],
     log_autoscroll: true,
+
+    // Studio Settings (independent from Generation tab)
+    studio_prompt: '',
+    studio_negative_prompt: '',
+    studio_aspect_ratio: '1:1',
+    studio_image_size: '1K',
+    studio_style_prefix: 'Detailed illustration, high quality.',
+    studio_max_prompt_length: 1000,
+    studio_selected_characters: [],
+    studio_include_descriptions: true,
+    studio_use_avatars: false,
+    studio_enhance_system_prompt: `You are an image prompt generator for AI art.
+The user will give you a brief description of what they want to see. Your job is to expand it into a detailed, high-quality image generation prompt.
+{{#if CHARACTERS}}
+CHARACTER APPEARANCES (use these exact details):
+{{CHARACTERS}}
+{{/if}}
+RULES:
+- Output ONLY the final image prompt, no commentary or explanation.
+- Include composition, lighting, mood, and environment details.
+- If character appearances are provided, incorporate them accurately.
+- Keep the output concise but descriptive (2-4 sentences max).
+- Do not add characters that weren't mentioned or provided.`,
+    studio_steps: 28,
+    studio_guidance: 5,
+    studio_seed: -1,
+    studio_sampler: 'euler_ancestral',
+    studio_last_seed: null,
 };
 
 const MAX_GALLERY_SIZE = 50;
@@ -574,6 +602,28 @@ async function loadSettings() {
         $('#nig_model').val(s.model);
     }
 
+    // Studio settings
+    $('#nig_studio_prompt').val(s.studio_prompt || '');
+    $('#nig_studio_char_count').text((s.studio_prompt || '').length);
+    $('#nig_studio_negative_prompt').val(s.studio_negative_prompt || '');
+    $('#nig_studio_aspect_ratio').val(s.studio_aspect_ratio || '1:1');
+    $('#nig_studio_image_size').val(s.studio_image_size || '1K');
+    $('#nig_studio_style_prefix').val(s.studio_style_prefix ?? defaultSettings.studio_style_prefix);
+    $('#nig_studio_max_prompt_length').val(s.studio_max_prompt_length || 1000);
+    $('#nig_studio_include_descriptions').prop('checked', s.studio_include_descriptions !== false);
+    $('#nig_studio_use_avatars').prop('checked', !!s.studio_use_avatars);
+    $('#nig_studio_steps').val(s.studio_steps || 28);
+    $('#nig_studio_steps_value').text(s.studio_steps || 28);
+    $('#nig_studio_guidance').val(s.studio_guidance || 5);
+    $('#nig_studio_guidance_value').text(s.studio_guidance || 5);
+    $('#nig_studio_seed').val(s.studio_seed ?? -1);
+    $('#nig_studio_sampler').val(s.studio_sampler || 'euler_ancestral');
+    if (s.studio_last_seed !== null && s.studio_last_seed !== undefined) {
+        $('#nig_studio_last_seed').text(`Last: ${s.studio_last_seed}`).show();
+    }
+    populateStudioCharacterDropdown();
+    updateStudioCharactersList();
+
     updateModelInfo();
     renderGallery();
 }
@@ -995,6 +1045,90 @@ function updateActiveCharactersList() {
                 <span class="nig_saved_desc">${shortDesc}</span>
                 <div class="nig_saved_actions">
                     <i class="fa-solid fa-trash nig_remove_active_char" data-name="${name}" title="Remove"></i>
+                </div>
+            </div>
+        `);
+    }
+}
+
+// ── Studio Character Management ──
+
+function populateStudioCharacterDropdown() {
+    const select = $('#nig_studio_char_select');
+    if (!select.length) return;
+
+    const previousValue = select.val();
+    select.empty();
+    select.append('<option value="">-- Add a character --</option>');
+
+    const settings = extension_settings[extensionName];
+    const selectedNames = new Set(Array.isArray(settings.studio_selected_characters) ? settings.studio_selected_characters : []);
+    const charList = getAvailableCharacters();
+
+    if (charList.length > 0) {
+        const sorted = [...charList].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        for (const char of sorted) {
+            if (!char?.name) continue;
+            if (selectedNames.has(char.name)) continue;
+            select.append(`<option value="${char.name}">${char.name}</option>`);
+        }
+    }
+
+    if (previousValue && select.find(`option[value="${previousValue}"]`).length) {
+        select.val(previousValue);
+    }
+}
+
+function addStudioCharacter(charName) {
+    const name = String(charName || '').trim();
+    if (!name) return false;
+
+    const settings = extension_settings[extensionName];
+    if (!Array.isArray(settings.studio_selected_characters)) settings.studio_selected_characters = [];
+    if (settings.studio_selected_characters.includes(name)) return false;
+
+    settings.studio_selected_characters.push(name);
+    saveSettingsDebounced();
+    updateStudioCharactersList();
+    populateStudioCharacterDropdown();
+    return true;
+}
+
+function removeStudioCharacter(charName) {
+    const settings = extension_settings[extensionName];
+    if (!Array.isArray(settings.studio_selected_characters)) return;
+    settings.studio_selected_characters = settings.studio_selected_characters.filter(n => n !== charName);
+    saveSettingsDebounced();
+    updateStudioCharactersList();
+    populateStudioCharacterDropdown();
+}
+
+function updateStudioCharactersList() {
+    const container = $('#nig_studio_chars_list');
+    if (!container.length) return;
+
+    container.empty();
+    const settings = extension_settings[extensionName];
+    const chars = Array.isArray(settings.studio_selected_characters) ? settings.studio_selected_characters : [];
+
+    if (chars.length === 0) {
+        container.html('<small class="nig_hint" style="display:block;">No characters selected</small>');
+        return;
+    }
+
+    const sorted = [...chars].sort((a, b) => a.localeCompare(b));
+    for (const name of sorted) {
+        const desc = getEffectiveCharacterDescriptionByName(name);
+        const shortDesc = desc ? (desc.length > 70 ? `${desc.substring(0, 70)}...` : desc) : 'No visual description found';
+        const exists = !!getCharacterByName(name);
+        const status = exists ? '' : ' <small class="nig_hint">(missing)</small>';
+
+        container.append(`
+            <div class="nig_saved_item" data-name="${name}">
+                <span class="nig_saved_name">${name}${status}</span>
+                <span class="nig_saved_desc">${shortDesc}</span>
+                <div class="nig_saved_actions">
+                    <i class="fa-solid fa-trash nig_remove_studio_char" data-name="${name}" title="Remove"></i>
                 </div>
             </div>
         `);
@@ -1806,6 +1940,23 @@ function getModelRuntimeProfile(modelOrId, providerId = null) {
         supportedParameters.includes('resolutions')
     );
 
+    const supportsNegativePrompt = (() => {
+        if (['gemini-image', 'openai-image'].includes(family)) return false;
+        if (id.includes('kontext')) return false;
+        if (activeProviderId === 'pollinations') return false;
+        if (/nai-diffusion|stable[-_]?diffusion|sdxl|hidream|z-image|ideogram|recraft/.test(id)) return true;
+        if (activeProviderId === 'custom') return true;
+        return false;
+    })();
+
+    const supportsAdvancedParams = (() => {
+        if (['gemini-image', 'openai-image'].includes(family)) return false;
+        if (activeProviderId === 'pollinations') return false;
+        if (/nai-diffusion|stable[-_]?diffusion|sdxl/.test(id)) return true;
+        if (activeProviderId === 'custom') return true;
+        return false;
+    })();
+
     const transport = (() => {
         if (activeProviderId === 'linkapi' && family === 'gemini-image') return 'linkapi-gemini-native';
         if (activeProviderId === 'linkapi') return 'linkapi-chat';
@@ -1826,6 +1977,8 @@ function getModelRuntimeProfile(modelOrId, providerId = null) {
         outputModalities,
         supportedParameters,
         supportsImageInput,
+        supportsNegativePrompt,
+        supportsAdvancedParams,
         supportsTieredImageSize,
         prefersDimensionSize,
         tierImageSizes: resolutionMeta.tierSizes,
@@ -2109,6 +2262,61 @@ function updateGenerationControlOptions(modelId = null) {
     }
 
     console.log(`[${extensionName}] Model controls updated for "${selectedModel || '(none)'}": ratios=${availableRatios.join(',') || 'none'} sizes=${availableSizes.join(',') || 'none'}`);
+}
+
+function updateStudioControlVisibility(modelId = null) {
+    const settings = extension_settings[extensionName];
+    const selectedModel = modelId ? String(modelId) : settings.model;
+    const profile = getModelRuntimeProfile(selectedModel);
+
+    // Update aspect ratio dropdown
+    const availableRatios = getModelAspectRatioOptions(profile);
+    const ratioSelect = $('#nig_studio_aspect_ratio');
+    if (ratioSelect.length) {
+        const optionsHtml = availableRatios
+            .map(ratio => `<option value="${ratio}">${ASPECT_RATIO_LABELS[ratio] || ratio}</option>`)
+            .join('');
+        ratioSelect.html(optionsHtml);
+        const effectiveRatio = getEffectiveAspectRatioForModel(settings.studio_aspect_ratio, selectedModel);
+        ratioSelect.val(effectiveRatio);
+        if (settings.studio_aspect_ratio !== effectiveRatio) {
+            settings.studio_aspect_ratio = effectiveRatio;
+            saveSettingsDebounced();
+        }
+    }
+
+    // Update image size dropdown
+    const sizeField = $('#nig_studio_image_size_field');
+    const sizeSelect = $('#nig_studio_image_size');
+    if (sizeField.length && sizeSelect.length) {
+        const availableSizes = getModelImageSizeOptions(profile);
+        if (availableSizes.length === 0) {
+            sizeField.hide();
+        } else {
+            sizeField.show();
+            const sizeHtml = availableSizes.map(size => `<option value="${size}">${size}</option>`).join('');
+            sizeSelect.html(sizeHtml);
+            const ratioForSize = settings.studio_aspect_ratio || defaultSettings.studio_aspect_ratio;
+            const effectiveSize = getEffectiveModelSizeOption(profile, settings.studio_image_size, ratioForSize);
+            sizeSelect.val(effectiveSize);
+            if (settings.studio_image_size !== effectiveSize) {
+                settings.studio_image_size = effectiveSize;
+                saveSettingsDebounced();
+            }
+        }
+    }
+
+    // Show/hide negative prompt section
+    const negSection = $('#nig_studio_negative_section');
+    if (negSection.length) {
+        negSection.toggle(!!profile.supportsNegativePrompt);
+    }
+
+    // Show/hide advanced settings section
+    const advSection = $('#nig_studio_advanced_section');
+    if (advSection.length) {
+        advSection.toggle(!!profile.supportsAdvancedParams);
+    }
 }
 
 function supportsImageInput(modelOrId) {
@@ -4568,7 +4776,7 @@ async function sendChatRequest(settings, body) {
 }
 
 
-function addToGallery(imageData, prompt, messageId = null) {
+function addToGallery(imageData, prompt, messageId = null, source = 'message') {
     const settings = extension_settings[extensionName];
     if (!settings.gallery) settings.gallery = [];
 
@@ -4577,6 +4785,7 @@ function addToGallery(imageData, prompt, messageId = null) {
         prompt: prompt.substring(0, 200),
         timestamp: Date.now(),
         messageId,
+        source,
     });
 
     if (settings.gallery.length > MAX_GALLERY_SIZE) {
@@ -4600,9 +4809,13 @@ function renderGallery() {
     emptyMsg.hide();
 
     gallery.forEach((item, i) => {
+        const sourceBadge = item.source === 'studio'
+            ? '<span class="nig_gallery_badge" title="Studio">&#127912;</span>'
+            : '';
         const galleryItem = $(`
             <div class="nig_gallery_item" data-index="${i}" title="${item.prompt}">
                 <img src="data:image/png;base64,${item.imageData}" />
+                ${sourceBadge}
                 <div class="nig_gallery_item_overlay">
                     <i class="fa-solid fa-eye nig_gallery_view" data-index="${i}" title="View"></i>
                     <i class="fa-solid fa-trash nig_gallery_delete" data-index="${i}" title="Delete"></i>
@@ -4666,6 +4879,231 @@ async function generateImage() {
         showErrorPopup('Generation Failed', error.message);
     } finally {
         btn.removeClass('generating').find('i').removeClass('fa-spinner fa-spin').addClass('fa-image');
+    }
+}
+
+async function enhanceStudioPrompt() {
+    const settings = extension_settings[extensionName];
+    const rawPrompt = $('#nig_studio_prompt').val().trim();
+    if (!rawPrompt) {
+        toastr.warning('Please enter a description to enhance.', 'Pawtrait');
+        return;
+    }
+
+    if (!getCurrentApiKey()) {
+        toastr.error('API Key is required for AI enhancement.', 'Pawtrait');
+        return;
+    }
+
+    if (!settings.summarizer_model) {
+        toastr.error('No summarizer model configured. Set one in the Connection tab.', 'Pawtrait');
+        return;
+    }
+
+    const btn = $('#nig_studio_enhance_btn');
+    btn.addClass('nig_btn_disabled').find('i').removeClass('fa-wand-magic-sparkles').addClass('fa-spinner fa-spin');
+
+    try {
+        // Build character context
+        const characterLines = [];
+        if (Array.isArray(settings.studio_selected_characters)) {
+            for (const charName of settings.studio_selected_characters) {
+                const desc = getEffectiveCharacterDescriptionByName(charName);
+                if (desc) characterLines.push(`${charName}: ${desc}`);
+            }
+        }
+
+        // Build system prompt from template
+        let systemPrompt = settings.studio_enhance_system_prompt || defaultSettings.studio_enhance_system_prompt;
+
+        if (characterLines.length > 0) {
+            systemPrompt = systemPrompt
+                .replace('{{#if CHARACTERS}}', '')
+                .replace('{{/if}}', '')
+                .replace('{{CHARACTERS}}', characterLines.join('\n\n'));
+        } else {
+            systemPrompt = systemPrompt.replace(/\{\{#if CHARACTERS\}\}[\s\S]*?\{\{\/if\}\}/g, '');
+        }
+
+        const chatBody = {
+            model: settings.summarizer_model,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: rawPrompt },
+            ],
+            max_tokens: 1500,
+            temperature: 0.4,
+        };
+
+        addRuntimeLog('info', 'Studio prompt enhancement started', {
+            model: settings.summarizer_model,
+            inputLength: rawPrompt.length,
+            characterCount: characterLines.length,
+        });
+
+        const respJson = await sendChatRequest(settings, chatBody);
+        const enhanced = respJson.choices?.[0]?.message?.content?.trim();
+
+        if (!enhanced) {
+            throw new Error('No enhanced prompt returned');
+        }
+
+        $('#nig_studio_prompt').val(enhanced).trigger('input');
+        addRuntimeLog('info', 'Studio prompt enhanced', {
+            outputLength: enhanced.length,
+            preview: enhanced.substring(0, 200),
+        });
+        toastr.success('Prompt enhanced!', 'Pawtrait Studio');
+    } catch (error) {
+        console.error(`[${extensionName}] Enhance error:`, error);
+        addRuntimeLog('error', 'Studio prompt enhancement failed', { error });
+        toastr.error(`Enhancement failed: ${error.message}`, 'Pawtrait');
+    } finally {
+        btn.removeClass('nig_btn_disabled').find('i').removeClass('fa-spinner fa-spin').addClass('fa-wand-magic-sparkles');
+    }
+}
+
+async function generateStudioImage() {
+    const settings = extension_settings[extensionName];
+
+    if (!getCurrentApiKey()) {
+        toastr.error('API Key is not set. Please configure it in the Connection tab.', 'Pawtrait');
+        return null;
+    }
+    if (!settings.api_endpoint) {
+        toastr.error('API Endpoint is not set.', 'Pawtrait');
+        return null;
+    }
+
+    const userPrompt = $('#nig_studio_prompt').val().trim();
+    if (!userPrompt) {
+        toastr.warning('Please enter a prompt.', 'Pawtrait');
+        return null;
+    }
+
+    const btn = $('#nig_studio_generate_btn');
+    btn.addClass('nig_btn_disabled').find('i').removeClass('fa-paintbrush').addClass('fa-spinner fa-spin');
+
+    try {
+        // Assemble prompt
+        const promptParts = [];
+
+        if (settings.studio_style_prefix) {
+            promptParts.push(settings.studio_style_prefix);
+        }
+
+        // Add character descriptions if enabled
+        if (settings.studio_include_descriptions && Array.isArray(settings.studio_selected_characters) && settings.studio_selected_characters.length > 0) {
+            const descParts = [];
+            for (const charName of settings.studio_selected_characters) {
+                const desc = getEffectiveCharacterDescriptionByName(charName);
+                if (desc) descParts.push(`${charName}: ${desc}`);
+            }
+            if (descParts.length > 0) {
+                promptParts.push(`Characters:\n${descParts.join('\n')}`);
+            }
+        }
+
+        promptParts.push(userPrompt);
+
+        let finalPrompt = promptParts.join('\n\n');
+        const maxLen = settings.studio_max_prompt_length || 1000;
+        if (finalPrompt.length > maxLen) {
+            finalPrompt = finalPrompt.substring(0, maxLen - 3) + '...';
+        }
+
+        // Build request body
+        const selectedAspectRatio = getEffectiveAspectRatioForModel(settings.studio_aspect_ratio, settings.model);
+        const modelProfile = getModelRuntimeProfile(settings.model);
+        const effectiveSizeOption = getEffectiveModelSizeOption(modelProfile, settings.studio_image_size, selectedAspectRatio);
+        const requestSize = isDimensionImageSizeValue(effectiveSizeOption)
+            ? normalizeImageDimensionValue(effectiveSizeOption)
+            : getModelRequestSize(modelProfile, selectedAspectRatio);
+
+        const requestBody = {
+            model: settings.model,
+            prompt: finalPrompt,
+            n: 1,
+            size: requestSize,
+            aspect_ratio: selectedAspectRatio,
+            response_format: 'b64_json',
+        };
+
+        if (effectiveSizeOption && isTierImageSizeValue(effectiveSizeOption)) {
+            requestBody.image_size = effectiveSizeOption;
+        }
+
+        // Negative prompt
+        const negativePrompt = $('#nig_studio_negative_prompt').val()?.trim();
+        if (negativePrompt && modelProfile.supportsNegativePrompt) {
+            requestBody.negative_prompt = negativePrompt;
+        }
+
+        // Advanced params
+        if (modelProfile.supportsAdvancedParams) {
+            requestBody.steps = settings.studio_steps;
+            requestBody.guidance_scale = settings.studio_guidance;
+            if (settings.studio_seed >= 0) {
+                requestBody.seed = settings.studio_seed;
+            }
+            requestBody.sampler = settings.studio_sampler;
+        }
+
+        // Reference images (character avatars)
+        const imageDataUrls = [];
+        if (settings.studio_use_avatars && Array.isArray(settings.studio_selected_characters)) {
+            for (const charName of settings.studio_selected_characters) {
+                const avatar = await getCharacterAvatarByName(charName);
+                if (avatar) {
+                    imageDataUrls.push(`data:${avatar.mimeType};base64,${avatar.data}`);
+                }
+            }
+        }
+
+        if (imageDataUrls.length === 1) {
+            requestBody.imageDataUrl = imageDataUrls[0];
+        } else if (imageDataUrls.length > 1) {
+            requestBody.imageDataUrls = imageDataUrls;
+        }
+
+        addRuntimeLog('info', 'Studio generation started', {
+            provider: settings.provider,
+            model: settings.model,
+            promptLength: finalPrompt.length,
+        });
+
+        const result = await sendImageRequest(settings, requestBody);
+
+        if (result?.imageData) {
+            const dataUrl = `data:${result.mimeType || 'image/png'};base64,${result.imageData}`;
+            $('#nig_studio_output_image').attr('src', dataUrl);
+            $('#nig_studio_output_section').show();
+            addToGallery(result.imageData, userPrompt, null, 'studio');
+
+            // Update last seed display
+            const responseSeed = result.seed ?? result.data?.[0]?.seed ?? null;
+            if (responseSeed !== null && responseSeed !== undefined) {
+                settings.studio_last_seed = responseSeed;
+                $('#nig_studio_last_seed').text(`Last: ${responseSeed}`).show();
+                saveSettingsDebounced();
+            }
+
+            addRuntimeLog('info', 'Studio generation succeeded', {
+                mimeType: result.mimeType || 'image/png',
+                imageDataLength: String(result.imageData || '').length,
+            });
+            toastr.success('Image generated!', 'Pawtrait Studio');
+            return { imageData: result.imageData, mimeType: result.mimeType || 'image/png' };
+        }
+
+        throw new Error('No image returned from API.');
+    } catch (error) {
+        console.error(`[${extensionName}] Studio error:`, error);
+        addRuntimeLog('error', 'Studio generation failed', { error });
+        showErrorPopup('Studio Generation Failed', error.message);
+        return null;
+    } finally {
+        btn.removeClass('nig_btn_disabled').find('i').removeClass('fa-spinner fa-spin').addClass('fa-paintbrush');
     }
 }
 
@@ -4752,6 +5190,32 @@ async function slashCommandHandler(args, prompt) {
     } catch (error) {
         addRuntimeLog('error', 'Slash command generate failed', { error });
         showErrorPopup('Generation Failed', error.message);
+    }
+    return '';
+}
+
+async function studioSlashCommandHandler(args, prompt) {
+    const trimmedPrompt = String(prompt).trim();
+    if (!trimmedPrompt) {
+        toastr.warning('Please provide a prompt.', 'Pawtrait');
+        return '';
+    }
+
+    addRuntimeLog('info', 'Studio slash command requested', {
+        promptLength: trimmedPrompt.length,
+    });
+
+    // Set the prompt in the Studio UI
+    $('#nig_studio_prompt').val(trimmedPrompt).trigger('input');
+
+    try {
+        const result = await generateStudioImage();
+        if (result) {
+            return `data:${result.mimeType};base64,${result.imageData}`;
+        }
+    } catch (error) {
+        addRuntimeLog('error', 'Studio slash command failed', { error });
+        showErrorPopup('Studio Generation Failed', error.message);
     }
     return '';
 }
@@ -5315,6 +5779,11 @@ jQuery(async () => {
         if (tab === 'logs') {
             renderRuntimeLogs();
         }
+        if (tab === 'studio') {
+            populateStudioCharacterDropdown();
+            updateStudioControlVisibility();
+            updateStudioCharactersList();
+        }
     });
 
     $('#nig_log_level_filter').on('change', function() {
@@ -5473,6 +5942,7 @@ jQuery(async () => {
             model: selectedModel,
         });
         updateGenerationControlOptions(selectedModel);
+        updateStudioControlVisibility(selectedModel);
         updateModelInfo();
         saveSettingsDebounced();
     });
@@ -5773,6 +6243,120 @@ jQuery(async () => {
     $('#nig_generate_btn').on('click', generateImage);
     $('#nig_clear_gallery').on('click', clearGallery);
 
+    // ── Studio Event Handlers ──
+
+    $('#nig_studio_generate_btn').on('click', generateStudioImage);
+    $('#nig_studio_enhance_btn').on('click', enhanceStudioPrompt);
+
+    $('#nig_studio_add_char_btn').on('click', function() {
+        const charName = $('#nig_studio_char_select').val();
+        if (charName && addStudioCharacter(charName)) {
+            $('#nig_studio_char_select').val('');
+        }
+    });
+
+    $(document).on('click', '.nig_remove_studio_char', function() {
+        removeStudioCharacter($(this).data('name'));
+    });
+
+    $('#nig_studio_clear_prompt_btn').on('click', function() {
+        $('#nig_studio_prompt').val('').trigger('input');
+    });
+
+    $('#nig_studio_prompt').on('input', function() {
+        $('#nig_studio_char_count').text($(this).val().length);
+    });
+
+    $('#nig_studio_include_descriptions').on('change', function() {
+        extension_settings[extensionName].studio_include_descriptions = $(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#nig_studio_use_avatars').on('change', function() {
+        extension_settings[extensionName].studio_use_avatars = $(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#nig_studio_negative_prompt').on('input', function() {
+        extension_settings[extensionName].studio_negative_prompt = $(this).val();
+        saveSettingsDebounced();
+    });
+
+    $('#nig_studio_aspect_ratio').on('change', function() {
+        const settings = extension_settings[extensionName];
+        const selected = normalizeAspectRatioValue($(this).val());
+        const effective = getEffectiveAspectRatioForModel(selected, settings.model);
+        $(this).val(effective);
+        settings.studio_aspect_ratio = effective;
+        saveSettingsDebounced();
+    });
+
+    $('#nig_studio_image_size').on('change', function() {
+        extension_settings[extensionName].studio_image_size = $(this).val();
+        saveSettingsDebounced();
+    });
+
+    $('#nig_studio_style_prefix').on('input', function() {
+        extension_settings[extensionName].studio_style_prefix = $(this).val();
+        saveSettingsDebounced();
+    });
+
+    $('#nig_studio_reset_style').on('click', function() {
+        extension_settings[extensionName].studio_style_prefix = defaultSettings.studio_style_prefix;
+        $('#nig_studio_style_prefix').val(defaultSettings.studio_style_prefix);
+        saveSettingsDebounced();
+        toastr.info('Style prefix reset.', 'Pawtrait');
+    });
+
+    $('#nig_studio_max_prompt_length').on('change', function() {
+        extension_settings[extensionName].studio_max_prompt_length = Number($(this).val()) || 1000;
+        saveSettingsDebounced();
+    });
+
+    // Advanced settings
+    $('#nig_studio_advanced_toggle').on('click', function() {
+        const body = $('#nig_studio_advanced_body');
+        const icon = $(this).find('.nig_collapse_icon');
+        body.toggle();
+        icon.toggleClass('expanded');
+    });
+
+    $('#nig_studio_steps').on('input', function() {
+        const val = Number($(this).val());
+        $('#nig_studio_steps_value').text(val);
+        extension_settings[extensionName].studio_steps = val;
+        saveSettingsDebounced();
+    });
+
+    $('#nig_studio_guidance').on('input', function() {
+        const val = Number($(this).val());
+        $('#nig_studio_guidance_value').text(val);
+        extension_settings[extensionName].studio_guidance = val;
+        saveSettingsDebounced();
+    });
+
+    $('#nig_studio_seed').on('change', function() {
+        extension_settings[extensionName].studio_seed = Number($(this).val());
+        saveSettingsDebounced();
+    });
+
+    $('#nig_studio_random_seed_btn').on('click', function() {
+        $('#nig_studio_seed').val(-1).trigger('change');
+    });
+
+    $('#nig_studio_last_seed').on('click', function() {
+        const seed = extension_settings[extensionName].studio_last_seed;
+        if (seed !== null && seed !== undefined) {
+            $('#nig_studio_seed').val(seed).trigger('change');
+            toastr.info(`Seed set to ${seed}`, 'Pawtrait');
+        }
+    });
+
+    $('#nig_studio_sampler').on('change', function() {
+        extension_settings[extensionName].studio_sampler = $(this).val();
+        saveSettingsDebounced();
+    });
+
     // Test prompt preview button
     $('#nig_test_prompt_btn').on('click', async function() {
         const settings = extension_settings[extensionName];
@@ -5841,6 +6425,21 @@ jQuery(async () => {
             }),
         ],
         helpString: 'Generate image. Example: /pawtrait a sunset',
+    }));
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'pawstudio',
+        returns: 'Generated image URL',
+        callback: studioSlashCommandHandler,
+        aliases: ['studio'],
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: 'Prompt',
+                typeList: [ARGUMENT_TYPE.STRING],
+                isRequired: true,
+            }),
+        ],
+        helpString: 'Generate image via Studio (standalone, no message context). Example: /pawstudio a sunset over mountains',
     }));
 
     console.log(`[${extensionName}] Loaded!`);
