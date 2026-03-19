@@ -633,6 +633,7 @@ async function loadSettings() {
     $('#nig_studio_enhance_length').val(s.studio_enhance_length || 'detailed');
 
     updateModelInfo();
+    updateStudioFormatBadge();
     renderGallery();
 }
 
@@ -1610,6 +1611,41 @@ function inferModelFamily(modelId, modelData = null) {
     if (source.includes('midjourney')) return 'midjourney';
     if (source.includes('riverflow')) return 'riverflow';
     return 'generic-image';
+}
+
+function getStudioEnhanceFormat() {
+    const settings = extension_settings[extensionName];
+    const modelId = settings.model || '';
+    const provider = settings.provider || '';
+    const profile = getModelRuntimeProfile(modelId);
+    const family = profile?.family || inferModelFamily(modelId);
+
+    // Tag-based formats
+    if (family === 'stable-diffusion' || family === 'hidream') return 'tags';
+    if (/nai-diffusion|sdxl|animagine|pony[-_]?diffusion/i.test(modelId)) return 'tags';
+    if (provider === 'custom') return 'tags';
+
+    // Natural language formats
+    if (['gemini-image', 'openai-image', 'flux', 'ideogram', 'recraft', 'seedream'].includes(family)) return 'natural';
+    if (provider === 'pollinations') return 'natural';
+
+    return 'natural';
+}
+
+function updateStudioFormatBadge() {
+    const format = getStudioEnhanceFormat();
+    const badge = $('#nig_studio_format_badge');
+    if (format === 'tags') {
+        badge.text('Tags + Prose')
+            .attr('title', 'Model expects tag-based prompts')
+            .removeClass('nig_format_natural')
+            .addClass('nig_format_tags');
+    } else {
+        badge.text('Natural Language')
+            .attr('title', 'Model expects natural language prompts')
+            .removeClass('nig_format_tags')
+            .addClass('nig_format_natural');
+    }
 }
 
 function gcd(a, b) {
@@ -5009,6 +5045,13 @@ async function enhanceStudioPrompt() {
             userContent += '\n\nOutput mode: DETAILED — Include every character trait listed. Do not abbreviate or omit any physical details. Length is not a constraint.';
         }
 
+        const enhanceFormat = getStudioEnhanceFormat();
+        if (enhanceFormat === 'tags') {
+            userContent += '\n\nOutput format: Use a HYBRID format — start with 1-2 short prose sentences establishing the overall scene and composition, then follow with Danbooru-style tags (comma-separated, lowercase, tag-first structure) for character details, style, and quality tags. Example structure:\n[Short prose scene description]. [Character name], [gender tag], [species/body tags], [hair tags], [eye tags], [clothing tags], [expression tags], [pose tags], [background tags], [style/quality tags]\nDo NOT write long natural language paragraphs. Character traits should be converted to tag format.';
+        } else {
+            userContent += '\n\nOutput format: Use flowing natural language descriptions. Write in detailed prose paragraphs describing the character and scene. Do NOT use comma-separated tags or Danbooru tag format.';
+        }
+
         const chatBody = {
             model: settings.summarizer_model,
             messages: [
@@ -5023,6 +5066,8 @@ async function enhanceStudioPrompt() {
             model: settings.summarizer_model,
             inputLength: rawPrompt.length,
             characterCount: characterLines.length,
+            enhanceFormat: enhanceFormat,
+            enhanceLength: settings.studio_enhance_length || 'detailed',
         });
 
         const respJson = await sendChatRequest(settings, chatBody);
@@ -6077,6 +6122,7 @@ jQuery(async () => {
         $('#nig_model').empty().append('<option value="">-- Click Fetch Models --</option>');
         updateGenerationControlOptions('');
         updateModelInfo();
+        updateStudioFormatBadge();
 
         // Fetch models if API key exists or provider doesn't require one
         const providerConfig = getProviderConfig(extension_settings[extensionName]);
@@ -6112,6 +6158,7 @@ jQuery(async () => {
         updateGenerationControlOptions(selectedModel);
         updateStudioControlVisibility(selectedModel);
         updateModelInfo();
+        updateStudioFormatBadge();
         saveSettingsDebounced();
     });
 

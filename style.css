@@ -237,6 +237,23 @@
     height: auto;
 }
 
+.nig_format_badge {
+    font-size: 0.75em;
+    padding: 2px 8px;
+    border-radius: 12px;
+    display: inline-block;
+}
+
+.nig_format_tags {
+    background: rgba(52, 152, 219, 0.2);
+    color: #8fd2ff;
+}
+
+.nig_format_natural {
+    background: rgba(92, 184, 92, 0.2);
+    color: #8fd8a0;
+}
+
 .nig_button_row {
     display: flex;
     gap: 8px;
