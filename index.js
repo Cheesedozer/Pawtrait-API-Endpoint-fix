@@ -2522,6 +2522,12 @@ function updateStudioControlVisibility(modelId = null) {
     if (advSection.length) {
         advSection.toggle(!!profile.supportsAdvancedParams);
     }
+
+    // Show/hide description prepend checkboxes for NAI models
+    const isNai = getStudioEnhanceFormat() === 'nai';
+    $('#nig_studio_include_descriptions_label').toggle(!isNai);
+    $('#nig_studio_include_persona_label').toggle(!isNai);
+    $('#nig_studio_nai_char_note').toggle(isNai);
 }
 
 function supportsImageInput(modelOrId) {
@@ -5426,8 +5432,9 @@ async function generateStudioImage() {
             }
         }
 
-        // Add character descriptions if enabled
-        if (settings.studio_include_descriptions && Array.isArray(settings.studio_selected_characters) && settings.studio_selected_characters.length > 0) {
+        // Add character descriptions if enabled (skip for NAI — descriptions go through enhancer instead)
+        const genFormat = getStudioEnhanceFormat();
+        if (genFormat !== 'nai' && settings.studio_include_descriptions && Array.isArray(settings.studio_selected_characters) && settings.studio_selected_characters.length > 0) {
             const descParts = [];
             for (const charName of settings.studio_selected_characters) {
                 const desc = getEffectiveCharacterDescriptionForStudio(charName);
@@ -5438,8 +5445,8 @@ async function generateStudioImage() {
             }
         }
 
-        // Add persona description if enabled
-        if (settings.studio_include_persona && settings.studio_selected_persona) {
+        // Add persona description if enabled (skip for NAI)
+        if (genFormat !== 'nai' && settings.studio_include_persona && settings.studio_selected_persona) {
             const personaDesc = getStudioPersonaDescription(settings.studio_selected_persona);
             if (personaDesc) {
                 const personaName = (power_user.personas || {})[settings.studio_selected_persona] || 'User';
