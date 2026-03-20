@@ -142,6 +142,7 @@ RULES:
     studio_include_persona: true,
     studio_negative_prompt_system: `You are a negative prompt generator for AI image generation. Given a positive image prompt, generate a concise negative prompt listing things to AVOID in the image. Focus on common quality issues and things that would conflict with the desired output. RULES: - Output ONLY the negative prompt tags, comma-separated. - Include standard quality negatives (lowres, blurry, bad anatomy, etc.) appropriate for the subject. - Add subject-specific negatives based on what's in the positive prompt. - Keep it concise — no more than 40 tags. - Do NOT include any explanation, commentary, or formatting. Just the comma-separated tags.`,
     studio_enhance_length: 'detailed',
+    studio_artists: [],
     studio_enhance_system_prompt_nai: `You are a prompt engineer specializing in NovelAI Diffusion V4.5 image generation. Transform natural descriptions into optimized NAI-format prompts.
 You MUST respond with a JSON object containing exactly three fields: "prompt", "negative_prompt", and "notes". No other text outside the JSON.
 {{#if CHARACTERS}}
@@ -159,6 +160,14 @@ TAG RULES:
 - Natural language sentences use normal capitalization and grammar.
 - Tags and natural language can be intermixed.
 - For furry/anthropomorphic characters, start the base prompt with "fur dataset,"
+DEDUPLICATION (CRITICAL):
+- Express each character trait as ONE tag only. Do not restate the same detail in different ways.
+- WRONG: "black sclera, black eyes, no pupils, pupil-less eyes, all-black eyes" — this is five tags for one concept.
+- RIGHT: "{all-black pupilless eyes}" — one emphasized tag that captures the full concept.
+- WRONG: "black claws, sharp claws, hook-like claws, long claws" — four tags for one feature.
+- RIGHT: "long sharp black hook-like claws" — one natural language phrase as a single tag.
+- When a Danbooru tag doesn't exist for a specific concept, use a short natural language phrase as a single tag instead of splitting it into multiple approximate tags.
+- If emphasis is needed, emphasize the single combined tag rather than creating duplicates.
 MULTI-CHARACTER FORMAT:
 - Character count tags (1girl, 2girls, 1other, etc.) go in the base prompt ONLY.
 - Each character section after a | starts with a gender tag WITHOUT count: "girl", "boy", or "other".
@@ -170,6 +179,12 @@ EMPHASIS (use sparingly):
 - Strengthen: {tag} = 1.05x weight. {{tag}} = 1.1025x.
 - Numeric: 2::tag :: sets weight to 2x.
 - Only emphasize elements that would otherwise be under-represented.
+TOKEN LIMIT:
+- NAI has a ~512 T5 token limit across the entire prompt (base + all character sections combined).
+- Budget roughly: 80-100 tokens for base prompt, remaining tokens split across character sections.
+- Prioritize the most visually distinctive traits first within each character section.
+- If a character has many details, use combined natural language phrases instead of individual tags to save tokens.
+- Example: instead of "tall female, chubby, large breasts, soft belly, wide hips, fat thighs" use "tall chubby female, large breasts, soft belly, wide hips, fat thighs" — combine where meaning is preserved.
 NEGATIVE PROMPT:
 Always start with: lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry
 Then add scene-specific negatives based on the content (e.g., "multiple girls" for single character scenes, "bad feet" for full body shots).
@@ -664,6 +679,7 @@ async function loadSettings() {
     $('#nig_studio_aspect_ratio').val(s.studio_aspect_ratio || '1:1');
     $('#nig_studio_image_size').val(s.studio_image_size || '1K');
     $('#nig_studio_style_prefix').val(s.studio_style_prefix ?? defaultSettings.studio_style_prefix);
+    renderStudioArtistsList();
     $('#nig_studio_max_prompt_length').val(s.studio_max_prompt_length || 1000);
     $('#nig_studio_include_descriptions').prop('checked', s.studio_include_descriptions !== false);
     $('#nig_studio_use_avatars').prop('checked', !!s.studio_use_avatars);
@@ -1193,6 +1209,47 @@ function updateStudioCharactersList() {
                 </div>
             </div>
         `);
+    }
+}
+
+function renderStudioArtistsList() {
+    const container = $('#nig_studio_artists_list');
+    if (!container.length) return;
+
+    container.empty();
+    const settings = extension_settings[extensionName];
+    const artists = Array.isArray(settings.studio_artists) ? settings.studio_artists : [];
+
+    // Update label with count
+    const label = $('#nig_studio_artist_label');
+    label.text(artists.length > 0 ? `Artist / Style Tags (${artists.length})` : 'Artist / Style Tags');
+
+    if (artists.length === 0) {
+        container.html('<small class="nig_hint" style="display:block;">No artists added</small>');
+        return;
+    }
+
+    for (const artist of artists) {
+        container.append(`<span class="nig_artist_chip"><span>${artist}</span><i class="fa-solid fa-xmark nig_remove_artist" data-artist="${artist}" title="Remove"></i></span>`);
+    }
+}
+
+function formatStudioArtistTags() {
+    const settings = extension_settings[extensionName];
+    const artists = Array.isArray(settings.studio_artists) ? settings.studio_artists : [];
+    if (artists.length === 0) return '';
+
+    const format = getStudioEnhanceFormat();
+
+    if (format === 'nai') {
+        return artists.map(a => `artist:${a.toLowerCase()}`).join(', ');
+    } else if (format === 'tags') {
+        return artists.map(a => a.toLowerCase()).join(', ');
+    } else {
+        if (artists.length === 1) return `in the style of ${artists[0]}`;
+        const last = artists[artists.length - 1];
+        const rest = artists.slice(0, -1).join(', ');
+        return `in the style of ${rest} and ${last}`;
     }
 }
 
@@ -5105,9 +5162,14 @@ async function enhanceStudioPrompt() {
 
             let userContent = rawPrompt;
             if (settings.studio_enhance_length === 'concise') {
-                userContent += '\n\nOutput mode: CONCISE — Keep the output to 2-4 sentences. Summarize character appearance briefly, focusing on the most distinctive traits.';
+                userContent += '\n\nOutput mode: CONCISE — Focus on the 10-15 most visually distinctive traits per character. Keep the total prompt under ~350 T5 tokens.';
             } else {
-                userContent += '\n\nOutput mode: DETAILED — Include every character trait listed. Do not abbreviate or omit any physical details. Length is not a constraint.';
+                userContent += '\n\nOutput mode: DETAILED — Include every UNIQUE character trait. However, express each trait only ONCE using the most precise tag or short phrase. Do not create redundant tags. Stay within ~480 T5 tokens total.';
+            }
+
+            const naiArtistStr = formatStudioArtistTags();
+            if (naiArtistStr) {
+                userContent += `\n\nArtist/Style: ${naiArtistStr}\nIMPORTANT: Incorporate this artist style into the prompt using the exact formatting provided above. Place artist tags in the base prompt's style/medium section.`;
             }
 
             const chatBody = {
@@ -5126,6 +5188,7 @@ async function enhanceStudioPrompt() {
                 characterCount: characterLines.length,
                 enhanceFormat: 'nai',
                 enhanceLength: settings.studio_enhance_length || 'detailed',
+                artists: naiArtistStr || '(none)',
             });
 
             const respJson = await sendChatRequest(settings, chatBody);
@@ -5185,6 +5248,11 @@ async function enhanceStudioPrompt() {
                 userContent += '\n\nOutput format: Use flowing natural language descriptions. Write in detailed prose paragraphs describing the character and scene. Do NOT use comma-separated tags or Danbooru tag format.';
             }
 
+            const artistStr = formatStudioArtistTags();
+            if (artistStr) {
+                userContent += `\n\nArtist/Style: ${artistStr}\nIMPORTANT: Incorporate this artist style into the prompt using the exact formatting provided above. Place artist tags in the base prompt's style/medium section.`;
+            }
+
             const chatBody = {
                 model: settings.summarizer_model,
                 messages: [
@@ -5200,6 +5268,7 @@ async function enhanceStudioPrompt() {
                 inputLength: rawPrompt.length,
                 characterCount: characterLines.length,
                 enhanceFormat: enhanceFormat,
+                artists: artistStr || '(none)',
                 enhanceLength: settings.studio_enhance_length || 'detailed',
             });
 
@@ -5331,6 +5400,32 @@ async function generateStudioImage() {
             addRuntimeLog('info', 'Skipping style prefix — NAI pipe syntax detected in prompt');
         }
 
+        // Add artist tags to generation prompt
+        const genArtistStr = formatStudioArtistTags();
+        let finalUserPrompt = userPrompt;
+        if (genArtistStr) {
+            if (hasNaiPipeSyntax) {
+                // Inject artist tags into the base prompt section (before first |)
+                const pipeIdx = finalUserPrompt.indexOf('|');
+                let baseSection = finalUserPrompt.substring(0, pipeIdx);
+                const rest = finalUserPrompt.substring(pipeIdx);
+                // Insert before quality tags if found, otherwise append to base
+                const qualityMatch = baseSection.match(/,\s*(best quality|very aesthetic|absurdres)/i);
+                if (qualityMatch) {
+                    const insertPos = baseSection.indexOf(qualityMatch[0]);
+                    baseSection = baseSection.substring(0, insertPos) + ', ' + genArtistStr + qualityMatch[0] + baseSection.substring(insertPos + qualityMatch[0].length);
+                } else {
+                    baseSection = baseSection.trimEnd() + ', ' + genArtistStr;
+                }
+                finalUserPrompt = baseSection + rest;
+                addRuntimeLog('info', 'Injected artist tags into NAI base prompt', { artists: genArtistStr });
+            } else {
+                // Non-NAI: prepend alongside style prefix
+                promptParts.push(genArtistStr);
+                addRuntimeLog('info', 'Added artist tags to prompt', { artists: genArtistStr });
+            }
+        }
+
         // Add character descriptions if enabled
         if (settings.studio_include_descriptions && Array.isArray(settings.studio_selected_characters) && settings.studio_selected_characters.length > 0) {
             const descParts = [];
@@ -5352,7 +5447,7 @@ async function generateStudioImage() {
             }
         }
 
-        promptParts.push(userPrompt);
+        promptParts.push(finalUserPrompt);
 
         let finalPrompt = promptParts.join('\n\n');
         const maxLen = settings.studio_max_prompt_length || 1000;
@@ -6647,6 +6742,39 @@ jQuery(async () => {
     $('#nig_studio_refresh_persona_btn').on('click', function() {
         populateStudioPersonaDropdown();
         toastr.info('Personas refreshed.', 'Pawtrait');
+    });
+
+    $('#nig_studio_add_artist_btn').on('click', function() {
+        const input = $('#nig_studio_artist_input');
+        const name = input.val().trim();
+        if (!name) return;
+        const settings = extension_settings[extensionName];
+        if (!Array.isArray(settings.studio_artists)) settings.studio_artists = [];
+        if (settings.studio_artists.some(a => a.toLowerCase() === name.toLowerCase())) {
+            toastr.warning('Artist already added.', 'Pawtrait');
+            return;
+        }
+        settings.studio_artists.push(name);
+        saveSettingsDebounced();
+        input.val('');
+        renderStudioArtistsList();
+    });
+
+    $('#nig_studio_artist_input').on('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            $('#nig_studio_add_artist_btn').trigger('click');
+        }
+    });
+
+    $(document).on('click', '.nig_remove_artist', function() {
+        const artistName = $(this).data('artist');
+        const settings = extension_settings[extensionName];
+        if (Array.isArray(settings.studio_artists)) {
+            settings.studio_artists = settings.studio_artists.filter(a => a !== artistName);
+            saveSettingsDebounced();
+            renderStudioArtistsList();
+        }
     });
 
     $('#nig_studio_negative_prompt').on('input', function() {

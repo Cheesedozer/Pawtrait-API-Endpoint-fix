@@ -259,6 +259,28 @@
     color: #c9a0ff;
 }
 
+.nig_artist_chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    margin: 4px;
+    background: rgba(187, 134, 252, 0.15);
+    border-radius: 16px;
+    font-size: 0.85em;
+}
+
+.nig_artist_chip .nig_remove_artist {
+    cursor: pointer;
+    opacity: 0.7;
+    font-size: 0.8em;
+}
+
+.nig_artist_chip .nig_remove_artist:hover {
+    opacity: 1;
+    color: #ff6b6b;
+}
+
 .nig_button_row {
     display: flex;
     gap: 8px;
